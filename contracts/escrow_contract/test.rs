@@ -398,6 +398,164 @@ fn test_refund_on_released_escrow_rejected() {
     client.refund_escrow(&admin, &11u64);
 }
 
+// ── event emission tests ─────────────────────────────────────────────────────
+
+#[test]
+fn test_create_escrow_emits_escrow_funded_event() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token_addr = setup_token(&env, &token_admin);
+
+    client.init(&admin, &0);
+    mint(&env, &token_addr, &sender, 1000);
+
+    client.create_escrow(&sender, &driver, &100u64, &token_addr, &1000);
+
+    let events = env.events().all();
+    let event = events.last().unwrap();
+    
+    // Verify event has two topics: escrow_funded and delivery_id
+    assert_eq!(event.topics.len(), 2);
+    assert!(events.len() > 0);
+}
+
+#[test]
+fn test_release_escrow_emits_escrow_released_event() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token_addr = setup_token(&env, &token_admin);
+
+    client.init(&admin, &0);
+    mint(&env, &token_addr, &sender, 1000);
+    client.create_escrow(&sender, &driver, &101u64, &token_addr, &1000);
+
+    let event_count_before = env.events().all().len();
+    client.release_escrow(&admin, &101u64);
+    let event_count_after = env.events().all().len();
+
+    // Verify new event was emitted
+    assert!(event_count_after > event_count_before);
+    let events = env.events().all();
+    let release_event = events.last().unwrap();
+    assert_eq!(release_event.topics.len(), 2);
+}
+
+#[test]
+fn test_refund_escrow_emits_escrow_refunded_event() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token_addr = setup_token(&env, &token_admin);
+
+    client.init(&admin, &0);
+    mint(&env, &token_addr, &sender, 500);
+    client.create_escrow(&sender, &driver, &102u64, &token_addr, &500);
+
+    let event_count_before = env.events().all().len();
+    client.refund_escrow(&admin, &102u64);
+    let event_count_after = env.events().all().len();
+
+    // Verify new event was emitted
+    assert!(event_count_after > event_count_before);
+    let events = env.events().all();
+    let refund_event = events.last().unwrap();
+    assert_eq!(refund_event.topics.len(), 2);
+}
+
+#[test]
+fn test_raise_dispute_emits_delivery_disputed_event() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token_addr = setup_token(&env, &token_admin);
+
+    client.init(&admin, &0);
+    mint(&env, &token_addr, &sender, 750);
+    client.create_escrow(&sender, &driver, &103u64, &token_addr, &750);
+
+    let event_count_before = env.events().all().len();
+    client.raise_dispute(&sender, &103u64);
+    let event_count_after = env.events().all().len();
+
+    // Verify new event was emitted
+    assert!(event_count_after > event_count_before);
+    let events = env.events().all();
+    let dispute_event = events.last().unwrap();
+    assert_eq!(dispute_event.topics.len(), 2);
+}
+
+#[test]
+fn test_resolve_dispute_to_driver_emits_dispute_resolved_event() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token_addr = setup_token(&env, &token_admin);
+
+    client.init(&admin, &0);
+    mint(&env, &token_addr, &sender, 750);
+    client.create_escrow(&sender, &driver, &104u64, &token_addr, &750);
+    client.raise_dispute(&sender, &104u64);
+
+    let event_count_before = env.events().all().len();
+    client.resolve_dispute(&admin, &104u64, &true);
+    let event_count_after = env.events().all().len();
+
+    // Verify new event was emitted
+    assert!(event_count_after > event_count_before);
+    let events = env.events().all();
+    let resolve_event = events.last().unwrap();
+    assert_eq!(resolve_event.topics.len(), 2);
+}
+
+#[test]
+fn test_resolve_dispute_to_sender_emits_dispute_resolved_event() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token_addr = setup_token(&env, &token_admin);
+
+    client.init(&admin, &0);
+    mint(&env, &token_addr, &sender, 300);
+    client.create_escrow(&sender, &driver, &105u64, &token_addr, &300);
+    client.raise_dispute(&sender, &105u64);
+
+    let event_count_before = env.events().all().len();
+    client.resolve_dispute(&admin, &105u64, &false);
+    let event_count_after = env.events().all().len();
+
+    // Verify new event was emitted
+    assert!(event_count_after > event_count_before);
+    let events = env.events().all();
+    let resolve_event = events.last().unwrap();
+    assert_eq!(resolve_event.topics.len(), 2);
+}
+
 #[test]
 fn test_lifecycle_events_emitted() {
     let (env, contract_id) = setup_env();
