@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{contract, contractimpl, token, Env, Symbol, Address};
-use shared_types::DeliveryStatus;
+use shared_types::{DeliveryStatus, events};
 
 mod constants {
     // Ledger closes ~every 5 seconds; 17,280 ledgers ≈ 1 day.
@@ -179,15 +179,17 @@ impl EscrowContract {
             &env,
             delivery_id,
             &EscrowRecord {
-                sender,
+                sender: sender.clone(),
                 driver,
                 token,
                 amount,
                 status: EscrowStatus::Pending,
             },
         );
-        env.events()
-            .publish((Symbol::new(&env, "EscrowCreated"), delivery_id), amount);
+        env.events().publish(
+            (events::escrow_funded(), delivery_id),
+            (sender, amount),
+        );
     }
 
     pub fn release_escrow(env: Env, caller: Address, delivery_id: u64) {
@@ -204,8 +206,10 @@ impl EscrowContract {
         );
         record.status = EscrowStatus::Released;
         save_escrow(&env, delivery_id, &record);
-        env.events()
-            .publish((Symbol::new(&env, "EscrowReleased"), delivery_id), record.amount);
+        env.events().publish(
+            (events::escrow_released(), delivery_id),
+            (record.driver, record.amount, 0i128),
+        );
     }
 
     pub fn refund_escrow(env: Env, caller: Address, delivery_id: u64) {
@@ -222,8 +226,10 @@ impl EscrowContract {
         );
         record.status = EscrowStatus::Refunded;
         save_escrow(&env, delivery_id, &record);
-        env.events()
-            .publish((Symbol::new(&env, "EscrowRefunded"), delivery_id), record.amount);
+        env.events().publish(
+            (events::escrow_refunded(), delivery_id),
+            (record.sender, record.amount),
+        );
     }
 
     pub fn raise_dispute(env: Env, caller: Address, delivery_id: u64) {
@@ -237,8 +243,11 @@ impl EscrowContract {
         }
         record.status = EscrowStatus::Disputed;
         save_escrow(&env, delivery_id, &record);
-        env.events()
-            .publish((Symbol::new(&env, "DisputeRaised"), delivery_id), delivery_id);
+        let timestamp = env.ledger().timestamp();
+        env.events().publish(
+            (events::delivery_disputed(), delivery_id),
+            (caller, timestamp),
+        );
     }
 
     pub fn resolve_dispute(
@@ -270,8 +279,8 @@ impl EscrowContract {
         }
         save_escrow(&env, delivery_id, &record);
         env.events().publish(
-            (Symbol::new(&env, "DisputeResolved"), delivery_id),
-            release_to_driver,
+            (events::dispute_resolved(), delivery_id),
+            (release_to_driver, caller),
         );
     }
 
