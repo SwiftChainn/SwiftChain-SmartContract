@@ -85,3 +85,48 @@ fn test_admin_transfer_emits_event() {
     // At least the AdminTransferred event was published during accept_admin
     assert!(!env.events().all().is_empty());
 }
+
+#[test]
+fn test_init_persists_escrow_amount_with_ttl() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let sender = Address::generate(&env);
+    env.mock_all_auths();
+
+    client.init(&sender, &5000);
+
+    // Verifies amount was written to persistent storage and TTL extension did not panic
+    assert_eq!(client.get_amount(), 5000);
+}
+
+#[test]
+fn test_propose_admin_extends_instance_ttl() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    env.mock_all_auths();
+
+    client.init(&admin, &1000);
+    // Verifies instance TTL extension in propose_admin does not panic and state is correct
+    client.propose_admin(&admin, &new_admin);
+    assert_eq!(client.get_admin(), admin);
+}
+
+#[test]
+fn test_accept_admin_extends_instance_ttl() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    env.mock_all_auths();
+
+    client.init(&admin, &1000);
+    client.propose_admin(&admin, &new_admin);
+    // Verifies instance TTL extension in accept_admin does not panic and admin is updated
+    client.accept_admin(&new_admin);
+    assert_eq!(client.get_admin(), new_admin);
+}
