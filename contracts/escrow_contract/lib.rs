@@ -187,7 +187,7 @@ impl EscrowContract {
             },
         );
         env.events().publish(
-            (events::escrow_funded(), delivery_id),
+            (events::escrow_funded(&env), delivery_id),
             (sender, amount),
         );
     }
@@ -207,7 +207,7 @@ impl EscrowContract {
         record.status = EscrowStatus::Released;
         save_escrow(&env, delivery_id, &record);
         env.events().publish(
-            (events::escrow_released(), delivery_id),
+            (events::escrow_released(&env), delivery_id),
             (record.driver, record.amount, 0i128),
         );
     }
@@ -227,7 +227,7 @@ impl EscrowContract {
         record.status = EscrowStatus::Refunded;
         save_escrow(&env, delivery_id, &record);
         env.events().publish(
-            (events::escrow_refunded(), delivery_id),
+            (events::escrow_refunded(&env), delivery_id),
             (record.sender, record.amount),
         );
     }
@@ -245,7 +245,7 @@ impl EscrowContract {
         save_escrow(&env, delivery_id, &record);
         let timestamp = env.ledger().timestamp();
         env.events().publish(
-            (events::delivery_disputed(), delivery_id),
+            (events::delivery_disputed(&env), delivery_id),
             (caller, timestamp),
         );
     }
@@ -279,7 +279,7 @@ impl EscrowContract {
         }
         save_escrow(&env, delivery_id, &record);
         env.events().publish(
-            (events::dispute_resolved(), delivery_id),
+            (events::dispute_resolved(&env), delivery_id),
             (release_to_driver, caller),
         );
     }
