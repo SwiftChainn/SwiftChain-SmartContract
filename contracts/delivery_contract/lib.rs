@@ -25,10 +25,12 @@ pub struct DeliveryMetadata {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeliveryRecord {
+    pub delivery_id: DeliveryId,
     pub sender: Address,
     pub driver: Option<Address>,
     pub status: DeliveryStatus,
     pub metadata: DeliveryMetadata,
+    pub created_at: u64,
     pub delivered_at: Option<u64>,
 }
 
@@ -36,6 +38,7 @@ pub struct DeliveryRecord {
 #[derive(Clone)]
 pub enum DataKey {
     Delivery(DeliveryId),
+    DeliveryCounter,
     Admin,
     EscrowContract,
 }
@@ -60,16 +63,37 @@ impl DeliveryContract {
         env.storage().instance().set(&DataKey::EscrowContract, &escrow);
     }
 
-    pub fn create_delivery(env: Env, sender: Address, recipient: Address, delivery_id: DeliveryId) {
+    pub fn create_delivery(env: Env, sender: Address, metadata: DeliveryMetadata) -> DeliveryId {
         sender.require_auth();
+
+        let mut counter: u64 = env.storage().persistent().get(&DataKey::DeliveryCounter).unwrap_or(0);
+        counter += 1;
+        env.storage().persistent().set(&DataKey::DeliveryCounter, &counter);
+
+        let delivery_id = counter;
+
         let record = DeliveryRecord {
+            delivery_id,
             sender: sender.clone(),
             driver: None,
             status: DeliveryStatus::Pending,
-            metadata: DeliveryMetadata { recipient },
+            metadata,
+            created_at: env.ledger().timestamp(),
             delivered_at: None,
         };
-        env.storage().persistent().set(&DataKey::Delivery(delivery_id), &record);
+
+        let key = DataKey::Delivery(delivery_id);
+        env.storage().persistent().set(&key, &record);
+        
+        // Extend TTL
+        env.storage().persistent().extend_ttl(&key, 518400, 518400);
+
+        env.events().publish(
+            (soroban_sdk::Symbol::new(&env, "delivery_created"),),
+            (delivery_id, sender),
+        );
+
+        delivery_id
     }
 
     pub fn cancel_delivery(
