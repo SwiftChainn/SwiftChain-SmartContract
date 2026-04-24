@@ -18,10 +18,18 @@ pub enum DeliveryStatus {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeliveryMetadata {
+    pub recipient: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeliveryRecord {
     pub sender: Address,
     pub driver: Option<Address>,
     pub status: DeliveryStatus,
+    pub metadata: DeliveryMetadata,
+    pub delivered_at: Option<u64>,
 }
 
 #[contracttype]
@@ -52,12 +60,14 @@ impl DeliveryContract {
         env.storage().instance().set(&DataKey::EscrowContract, &escrow);
     }
 
-    pub fn create_delivery(env: Env, sender: Address, delivery_id: DeliveryId) {
+    pub fn create_delivery(env: Env, sender: Address, recipient: Address, delivery_id: DeliveryId) {
         sender.require_auth();
         let record = DeliveryRecord {
             sender: sender.clone(),
             driver: None,
             status: DeliveryStatus::Pending,
+            metadata: DeliveryMetadata { recipient },
+            delivered_at: None,
         };
         env.storage().persistent().set(&DataKey::Delivery(delivery_id), &record);
     }
@@ -144,6 +154,53 @@ impl DeliveryContract {
         env.events().publish(
             (Symbol::new(&env, "driver_assigned"),),
             (delivery_id, driver),
+        );
+    }
+
+    pub fn confirm_delivery(
+        env: Env,
+        recipient: Address,
+        delivery_id: DeliveryId,
+    ) {
+        recipient.require_auth();
+
+        let key = DataKey::Delivery(delivery_id);
+        let mut delivery: DeliveryRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic!("DeliveryNotFound"));
+
+        if recipient != delivery.metadata.recipient {
+            panic!("NotAuthorized");
+        }
+
+        if delivery.status != DeliveryStatus::InTransit {
+            panic!("InvalidState");
+        }
+
+        let escrow_address: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::EscrowContract)
+            .unwrap_or_else(|| panic!("EscrowNotConfigured"));
+
+        use soroban_sdk::IntoVal;
+        let _: () = env.invoke_contract(
+            &escrow_address,
+            &soroban_sdk::Symbol::new(&env, "release_escrow"),
+            soroban_sdk::vec![&env, delivery_id.into_val(&env)],
+        );
+
+        delivery.status = DeliveryStatus::Delivered;
+        delivery.delivered_at = Some(env.ledger().timestamp());
+
+        env.storage().persistent().set(&key, &delivery);
+        env.storage().persistent().extend_ttl(&key, 518400, 518400);
+
+        env.events().publish(
+            (soroban_sdk::Symbol::new(&env, "delivery_confirmed"),),
+            (delivery_id, recipient),
         );
     }
 

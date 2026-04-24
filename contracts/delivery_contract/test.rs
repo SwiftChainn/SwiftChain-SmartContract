@@ -1,5 +1,6 @@
 #![cfg(test)]
- 
+extern crate std;
+
 use super::*;
 use soroban_sdk::{testutils::{Address as _, Events}, Address, Env, Symbol, TryFromVal};
 
@@ -25,12 +26,14 @@ fn test_successful_assignment_by_admin() {
 
     let delivery_id = 1;
     let sender = Address::generate(&env);
-    client.create_delivery(&sender, &delivery_id);
+    let recipient = Address::generate(&env);
+    client.create_delivery(&sender, &recipient, &delivery_id);
 
     client.assign_driver(&admin, &delivery_id, &driver);
 
     // Verify events
     let events = env.events().all();
+    std::println!("EVENTS LEN: {}", events.len());
     let last_event = events.last().unwrap();
     
     assert_eq!(
@@ -62,7 +65,8 @@ fn test_successful_self_assignment_by_driver() {
 
     let delivery_id = 2;
     let sender = Address::generate(&env);
-    client.create_delivery(&sender, &delivery_id);
+    let recipient = Address::generate(&env);
+    client.create_delivery(&sender, &recipient, &delivery_id);
 
     client.assign_driver(&driver, &delivery_id, &driver);
 
@@ -85,7 +89,8 @@ fn test_unauthorized_caller_rejected() {
 
     let delivery_id = 3;
     let sender = Address::generate(&env);
-    client.create_delivery(&sender, &delivery_id);
+    let recipient = Address::generate(&env);
+    client.create_delivery(&sender, &recipient, &delivery_id);
 
     client.assign_driver(&unauthorized, &delivery_id, &driver);
 }
@@ -97,7 +102,8 @@ fn test_assignment_when_status_not_pending() {
 
     let delivery_id = 4;
     let sender = Address::generate(&env);
-    client.create_delivery(&sender, &delivery_id);
+    let recipient = Address::generate(&env);
+    client.create_delivery(&sender, &recipient, &delivery_id);
 
     // First assignment changes status to Active
     client.assign_driver(&admin, &delivery_id, &driver);
@@ -129,7 +135,8 @@ fn test_cancel_delivery_pending() {
 
     let delivery_id = 10;
     let sender = Address::generate(&env);
-    client.create_delivery(&sender, &delivery_id);
+    let recipient = Address::generate(&env);
+    client.create_delivery(&sender, &recipient, &delivery_id);
 
     client.cancel_delivery(&sender, &delivery_id);
 
@@ -144,6 +151,7 @@ fn test_cancel_delivery_pending() {
     assert_eq!(delivery.status, DeliveryStatus::Cancelled);
 
     let events = env.events().all();
+    std::println!("EVENTS LEN: {}", events.len());
     let last_event = events.last().unwrap();
     let topic0: Symbol = Symbol::try_from_val(&env, &last_event.1.get(0).unwrap()).unwrap();
     assert_eq!(topic0, Symbol::new(&env, "delivery_cancelled"));
@@ -157,7 +165,8 @@ fn test_cancel_delivery_active() {
 
     let delivery_id = 11;
     let sender = Address::generate(&env);
-    client.create_delivery(&sender, &delivery_id);
+    let recipient = Address::generate(&env);
+    client.create_delivery(&sender, &recipient, &delivery_id);
     client.assign_driver(&admin, &delivery_id, &driver);
 
     client.cancel_delivery(&sender, &delivery_id);
@@ -182,7 +191,8 @@ fn test_cancel_delivery_unauthorized() {
 
     let delivery_id = 12;
     let sender = Address::generate(&env);
-    client.create_delivery(&sender, &delivery_id);
+    let recipient = Address::generate(&env);
+    client.create_delivery(&sender, &recipient, &delivery_id);
 
     client.cancel_delivery(&unauthorized, &delivery_id);
 }
@@ -196,7 +206,8 @@ fn test_cancel_delivery_invalid_state() {
 
     let delivery_id = 13;
     let sender = Address::generate(&env);
-    client.create_delivery(&sender, &delivery_id);
+    let recipient = Address::generate(&env);
+    client.create_delivery(&sender, &recipient, &delivery_id);
 
     client.cancel_delivery(&sender, &delivery_id); // Now Cancelled
 
@@ -213,7 +224,8 @@ fn test_cancel_delivery_escrow_failure() {
 
     let delivery_id = 999; // trigger failure in mock
     let sender = Address::generate(&env);
-    client.create_delivery(&sender, &delivery_id);
+    let recipient = Address::generate(&env);
+    client.create_delivery(&sender, &recipient, &delivery_id);
 
     client.cancel_delivery(&sender, &delivery_id);
 }
