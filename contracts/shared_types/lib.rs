@@ -1,5 +1,5 @@
 #![no_std]
-
+ 
 use soroban_sdk::{contracttype, String};
 
 // Event topic constants for on-chain event tracking
