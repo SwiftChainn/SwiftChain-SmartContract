@@ -11,12 +11,15 @@ pub type DeliveryId = u64;
 pub enum DeliveryStatus {
     Pending,
     Active,
-    Completed,
+    InTransit,
+    Delivered,
+    Cancelled,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeliveryRecord {
+    pub sender: Address,
     pub driver: Option<Address>,
     pub status: DeliveryStatus,
 }
@@ -26,6 +29,7 @@ pub struct DeliveryRecord {
 pub enum DataKey {
     Delivery(DeliveryId),
     Admin,
+    EscrowContract,
 }
 
 #[contract]
@@ -40,12 +44,67 @@ impl DeliveryContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
     }
 
-    pub fn create_delivery(env: Env, delivery_id: DeliveryId) {
+    pub fn set_escrow_contract(env: Env, admin: Address, escrow: Address) {
+        admin.require_auth();
+        if !Self::is_admin(&env, &admin) {
+            panic!("NotAuthorized");
+        }
+        env.storage().instance().set(&DataKey::EscrowContract, &escrow);
+    }
+
+    pub fn create_delivery(env: Env, sender: Address, delivery_id: DeliveryId) {
+        sender.require_auth();
         let record = DeliveryRecord {
+            sender: sender.clone(),
             driver: None,
             status: DeliveryStatus::Pending,
         };
         env.storage().persistent().set(&DataKey::Delivery(delivery_id), &record);
+    }
+
+    pub fn cancel_delivery(
+        env: Env,
+        sender: Address,
+        delivery_id: DeliveryId,
+    ) {
+        sender.require_auth();
+
+        let key = DataKey::Delivery(delivery_id);
+        let mut delivery: DeliveryRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic!("DeliveryNotFound"));
+
+        if delivery.sender != sender {
+            panic!("NotAuthorized");
+        }
+
+        if delivery.status != DeliveryStatus::Pending && delivery.status != DeliveryStatus::Active {
+            panic!("InvalidState");
+        }
+
+        let escrow_address: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::EscrowContract)
+            .unwrap_or_else(|| panic!("EscrowNotConfigured"));
+
+        use soroban_sdk::IntoVal;
+        let _: () = env.invoke_contract(
+            &escrow_address,
+            &soroban_sdk::Symbol::new(&env, "refund_escrow"),
+            soroban_sdk::vec![&env, delivery_id.into_val(&env)],
+        );
+
+        delivery.status = DeliveryStatus::Cancelled;
+        env.storage().persistent().set(&key, &delivery);
+        env.storage().persistent().extend_ttl(&key, 518400, 518400);
+
+        env.events().publish(
+            (soroban_sdk::Symbol::new(&env, "delivery_cancelled"),),
+            (delivery_id, sender),
+        );
     }
 
     pub fn assign_driver(
