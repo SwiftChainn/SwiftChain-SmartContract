@@ -80,6 +80,7 @@ impl DeliveryContract {
             created_at: env.ledger().timestamp(),
             delivered_at: None,
         };
+        
 
         let key = DataKey::Delivery(delivery_id);
         env.storage().persistent().set(&key, &record);

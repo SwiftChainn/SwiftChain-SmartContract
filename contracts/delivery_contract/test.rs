@@ -44,6 +44,7 @@ fn test_successful_assignment_by_admin() {
     let delivery_id = client.create_delivery(&sender, &metadata);
 
     client.assign_driver(&admin, &delivery_id, &driver);
+    
 
     // Verify events
     let events = env.events().all();
