@@ -1,12 +1,21 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, contracterror, Env, Symbol, Address, panic_with_error};
-use shared_types::DeliveryStatus;
+use soroban_sdk::{
+    contract, contractimpl, contracttype, contracterror, Env, Symbol, Address, panic_with_error,
+    token,
+};
+use shared_types::{DeliveryStatus, events};
+
+mod constants {
+    pub const ESCROW_TTL_THRESHOLD: u32 = 518400;
+    pub const ESCROW_TTL_EXTEND_TO: u32 = 518400;
+}
 
 #[contracttype]
 #[derive(Clone)]
 enum DataKey {
     Admin,
+    PendingAdmin,
     PlatformFeeBps,
     Amount,
     Escrow(u64),
@@ -18,6 +27,26 @@ enum DataKey {
 pub enum EscrowError {
     InvalidState = 1,
     DeliveryNotFound = 2,
+    InsufficientFunds = 3,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EscrowStatus {
+    Pending,
+    Released,
+    Refunded,
+    Disputed,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowRecord {
+    pub sender: Address,
+    pub driver: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub status: EscrowStatus,
 }
 
 #[contracttype]
@@ -27,13 +56,39 @@ pub struct FeeUpdated {
     pub new_fee: u32,
 }
 
+fn save_escrow(env: &Env, delivery_id: u64, record: &EscrowRecord) {
+    let key = DataKey::Escrow(delivery_id);
+    env.storage().persistent().set(&key, record);
+    env.storage().persistent().extend_ttl(
+        &key,
+        constants::ESCROW_TTL_THRESHOLD,
+        constants::ESCROW_TTL_EXTEND_TO,
+    );
+}
+
+fn load_escrow(env: &Env, delivery_id: u64) -> EscrowRecord {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Escrow(delivery_id))
+        .unwrap_or_else(|| panic_with_error!(env, EscrowError::DeliveryNotFound))
+}
+
+fn require_admin(env: &Env, caller: &Address) {
+    let stored_admin: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::Admin)
+        .expect("Not initialized");
+    if *caller != stored_admin {
+        panic!("Unauthorized");
+    }
+}
+
 #[contract]
 pub struct EscrowContract;
 
 #[contractimpl]
-
 impl EscrowContract {
-    /// Initialize the escrow with an admin and amount
     pub fn init(env: Env, admin: Address, amount: i128) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("Already initialized");
@@ -43,38 +98,43 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::PlatformFeeBps, &0u32);
     }
 
-    /// Update the platform fee in basis points (max 1000 = 10%)
     pub fn update_platform_fee(env: Env, admin: Address, new_fee_bps: u32) {
-        // 1. Verify against stored admin
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).expect("Not initialized");
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
         if admin != stored_admin {
             panic!("Unauthorized");
         }
-
-        // 2. Require authentication
         admin.require_auth();
-
-        // 3. Validate fee <= 1000 bps
         if new_fee_bps > 1000 {
             panic_with_error!(&env, EscrowError::InvalidState);
         }
-
-        // 4. Update storage and emit event
-        let old_fee: u32 = env.storage().instance().get(&DataKey::PlatformFeeBps).unwrap_or(0);
-        env.storage().instance().set(&DataKey::PlatformFeeBps, &new_fee_bps);
-
+        let old_fee: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PlatformFeeBps)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::PlatformFeeBps, &new_fee_bps);
         env.events().publish(
             (Symbol::new(&env, "FeeUpdated"),),
-            FeeUpdated { old_fee, new_fee: new_fee_bps }
+            FeeUpdated {
+                old_fee,
+                new_fee: new_fee_bps,
+            },
         );
     }
 
-    /// Get current platform fee in basis points
     pub fn get_platform_fee(env: Env) -> u32 {
-        env.storage().instance().get(&DataKey::PlatformFeeBps).unwrap_or(0)
+        env.storage()
+            .instance()
+            .get(&DataKey::PlatformFeeBps)
+            .unwrap_or(0)
     }
 
-    /// Retrieve the delivery status for the escrow
     pub fn get_status(_env: Env) -> DeliveryStatus {
         DeliveryStatus::Created
     }
@@ -82,15 +142,15 @@ impl EscrowContract {
     pub fn get_admin(env: Env) -> Address {
         env.storage()
             .instance()
-            .get(&Symbol::new(&env, "admin"))
-            .unwrap()
+            .get(&DataKey::Admin)
+            .expect("Not initialized")
     }
 
     pub fn get_amount(env: Env) -> i128 {
         env.storage()
-            .persistent()
-            .get(&Symbol::new(&env, "amount"))
-            .unwrap()
+            .instance()
+            .get(&DataKey::Amount)
+            .unwrap_or(0)
     }
 
     pub fn propose_admin(env: Env, current_admin: Address, new_admin: Address) {
@@ -98,14 +158,14 @@ impl EscrowContract {
         let stored_admin: Address = env
             .storage()
             .instance()
-            .get(&Symbol::new(&env, "admin"))
-            .unwrap();
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
         if stored_admin != current_admin {
             panic!("caller is not the admin");
         }
         env.storage()
             .instance()
-            .set(&Symbol::new(&env, "pending_admin"), &new_admin);
+            .set(&DataKey::PendingAdmin, &new_admin);
         env.storage().instance().extend_ttl(
             constants::ESCROW_TTL_THRESHOLD,
             constants::ESCROW_TTL_EXTEND_TO,
@@ -117,22 +177,22 @@ impl EscrowContract {
         let pending: Address = env
             .storage()
             .instance()
-            .get(&Symbol::new(&env, "pending_admin"))
-            .unwrap();
+            .get(&DataKey::PendingAdmin)
+            .expect("no pending admin");
         if pending != new_admin {
             panic!("caller is not the pending admin");
         }
         let old_admin: Address = env
             .storage()
             .instance()
-            .get(&Symbol::new(&env, "admin"))
-            .unwrap();
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
         env.storage()
             .instance()
-            .set(&Symbol::new(&env, "admin"), &new_admin);
+            .set(&DataKey::Admin, &new_admin);
         env.storage()
             .instance()
-            .remove(&Symbol::new(&env, "pending_admin"));
+            .remove(&DataKey::PendingAdmin);
         env.storage().instance().extend_ttl(
             constants::ESCROW_TTL_THRESHOLD,
             constants::ESCROW_TTL_EXTEND_TO,
@@ -190,6 +250,12 @@ impl EscrowContract {
         if record.status != EscrowStatus::Pending {
             panic!("escrow is not in pending state");
         }
+        // Balance verification guard: confirm contract holds sufficient funds before transfer
+        let contract_balance = token::Client::new(&env, &record.token)
+            .balance(&env.current_contract_address());
+        if contract_balance < record.amount {
+            panic_with_error!(&env, EscrowError::InsufficientFunds);
+        }
         token::Client::new(&env, &record.token).transfer(
             &env.current_contract_address(),
             &record.driver,
@@ -209,6 +275,12 @@ impl EscrowContract {
         let mut record = load_escrow(&env, delivery_id);
         if record.status != EscrowStatus::Pending {
             panic!("escrow is not in pending state");
+        }
+        // Balance verification guard: confirm contract holds sufficient funds before transfer
+        let contract_balance = token::Client::new(&env, &record.token)
+            .balance(&env.current_contract_address());
+        if contract_balance < record.amount {
+            panic_with_error!(&env, EscrowError::InsufficientFunds);
         }
         token::Client::new(&env, &record.token).transfer(
             &env.current_contract_address(),
