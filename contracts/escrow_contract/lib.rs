@@ -1,10 +1,10 @@
 #![no_std]
 
+use shared_types::{events, DeliveryStatus};
 use soroban_sdk::{
-    contract, contractimpl, contracttype, contracterror, Env, Symbol, Address, panic_with_error,
-    token,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, Env,
+    Symbol,
 };
-use shared_types::{DeliveryStatus, events};
 
 mod constants {
     pub const ESCROW_TTL_THRESHOLD: u32 = 518400;
@@ -95,7 +95,9 @@ impl EscrowContract {
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Amount, &amount);
-        env.storage().instance().set(&DataKey::PlatformFeeBps, &0u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::PlatformFeeBps, &0u32);
     }
 
     pub fn update_platform_fee(env: Env, admin: Address, new_fee_bps: u32) {
@@ -147,10 +149,7 @@ impl EscrowContract {
     }
 
     pub fn get_amount(env: Env) -> i128 {
-        env.storage()
-            .instance()
-            .get(&DataKey::Amount)
-            .unwrap_or(0)
+        env.storage().instance().get(&DataKey::Amount).unwrap_or(0)
     }
 
     pub fn propose_admin(env: Env, current_admin: Address, new_admin: Address) {
@@ -187,12 +186,8 @@ impl EscrowContract {
             .instance()
             .get(&DataKey::Admin)
             .expect("Not initialized");
-        env.storage()
-            .instance()
-            .set(&DataKey::Admin, &new_admin);
-        env.storage()
-            .instance()
-            .remove(&DataKey::PendingAdmin);
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.storage().instance().remove(&DataKey::PendingAdmin);
         env.storage().instance().extend_ttl(
             constants::ESCROW_TTL_THRESHOLD,
             constants::ESCROW_TTL_EXTEND_TO,
@@ -237,10 +232,8 @@ impl EscrowContract {
                 status: EscrowStatus::Pending,
             },
         );
-        env.events().publish(
-            (events::escrow_funded(&env), delivery_id),
-            (sender, amount),
-        );
+        env.events()
+            .publish((events::escrow_funded(&env), delivery_id), (sender, amount));
     }
 
     pub fn release_escrow(env: Env, caller: Address, delivery_id: u64) {
@@ -251,8 +244,8 @@ impl EscrowContract {
             panic!("escrow is not in pending state");
         }
         // Balance verification guard: confirm contract holds sufficient funds before transfer
-        let contract_balance = token::Client::new(&env, &record.token)
-            .balance(&env.current_contract_address());
+        let contract_balance =
+            token::Client::new(&env, &record.token).balance(&env.current_contract_address());
         if contract_balance < record.amount {
             panic_with_error!(&env, EscrowError::InsufficientFunds);
         }
@@ -277,8 +270,8 @@ impl EscrowContract {
             panic!("escrow is not in pending state");
         }
         // Balance verification guard: confirm contract holds sufficient funds before transfer
-        let contract_balance = token::Client::new(&env, &record.token)
-            .balance(&env.current_contract_address());
+        let contract_balance =
+            token::Client::new(&env, &record.token).balance(&env.current_contract_address());
         if contract_balance < record.amount {
             panic_with_error!(&env, EscrowError::InsufficientFunds);
         }
@@ -313,12 +306,7 @@ impl EscrowContract {
         );
     }
 
-    pub fn resolve_dispute(
-        env: Env,
-        caller: Address,
-        delivery_id: u64,
-        release_to_driver: bool,
-    ) {
+    pub fn resolve_dispute(env: Env, caller: Address, delivery_id: u64, release_to_driver: bool) {
         caller.require_auth();
         require_admin(&env, &caller);
         let mut record = load_escrow(&env, delivery_id);
@@ -348,7 +336,11 @@ impl EscrowContract {
     }
 
     pub fn get_escrow(env: Env, delivery_id: u64) -> EscrowRecord {
-        if !env.storage().persistent().has(&DataKey::Escrow(delivery_id)) {
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::Escrow(delivery_id))
+        {
             panic_with_error!(&env, EscrowError::DeliveryNotFound);
         }
         load_escrow(&env, delivery_id)

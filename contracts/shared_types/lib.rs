@@ -1,5 +1,5 @@
 #![no_std]
- 
+
 use soroban_sdk::{contracttype, String};
 
 // Event topic constants for on-chain event tracking
@@ -26,8 +26,6 @@ pub mod events {
         Symbol::new(env, "dispute_resolved")
     }
 }
-
-
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]

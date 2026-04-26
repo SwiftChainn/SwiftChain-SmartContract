@@ -17,7 +17,8 @@ fn setup_env() -> (Env, Address) {
 }
 
 fn setup_token(env: &Env, admin: &Address) -> Address {
-    env.register_stellar_asset_contract_v2(admin.clone()).address()
+    env.register_stellar_asset_contract_v2(admin.clone())
+        .address()
 }
 
 fn mint(env: &Env, token: &Address, to: &Address, amount: i128) {
@@ -69,7 +70,13 @@ fn test_update_platform_fee_success() {
     assert_eq!(topic_sym, Symbol::new(&env, "FeeUpdated"));
 
     let event_value: FeeUpdated = last_event.2.into_val(&env);
-    assert_eq!(event_value, FeeUpdated { old_fee: 0, new_fee: 500 });
+    assert_eq!(
+        event_value,
+        FeeUpdated {
+            old_fee: 0,
+            new_fee: 500
+        }
+    );
 }
 
 #[test]
@@ -490,7 +497,9 @@ fn test_release_escrow_insufficient_funds_rejected() {
             .get(&DataKey::Escrow(51u64))
             .unwrap();
         record.amount = 2000; // contract only holds 1000 tokens
-        env.storage().persistent().set(&DataKey::Escrow(51u64), &record);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(51u64), &record);
     });
 
     let result = client.try_release_escrow(&admin, &51u64);
@@ -523,7 +532,9 @@ fn test_refund_escrow_insufficient_funds_rejected() {
             .get(&DataKey::Escrow(52u64))
             .unwrap();
         record.amount = 2000; // contract only holds 1000 tokens
-        env.storage().persistent().set(&DataKey::Escrow(52u64), &record);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(52u64), &record);
     });
 
     let result = client.try_refund_escrow(&admin, &52u64);

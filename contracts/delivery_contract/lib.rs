@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, contracterror, Address, Env, Symbol, panic_with_error,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, Symbol,
 };
 
 pub type DeliveryId = u64;
@@ -60,10 +60,7 @@ pub enum DeliveryError {
 ///   InTransit → Delivered, Disputed
 ///   Disputed  → Delivered, Cancelled
 ///   Delivered, Cancelled → (terminal, no transitions)
-pub fn validate_transition(
-    from: DeliveryStatus,
-    to: DeliveryStatus,
-) -> Result<(), DeliveryError> {
+pub fn validate_transition(from: DeliveryStatus, to: DeliveryStatus) -> Result<(), DeliveryError> {
     let valid = match (&from, &to) {
         (DeliveryStatus::Pending, DeliveryStatus::Active) => true,
         (DeliveryStatus::Pending, DeliveryStatus::Cancelled) => true,
@@ -184,12 +181,7 @@ impl DeliveryContract {
         );
     }
 
-    pub fn assign_driver(
-        env: Env,
-        caller: Address,
-        delivery_id: DeliveryId,
-        driver: Address,
-    ) {
+    pub fn assign_driver(env: Env, caller: Address, delivery_id: DeliveryId, driver: Address) {
         caller.require_auth();
 
         let is_admin = Self::is_admin(&env, &caller);
