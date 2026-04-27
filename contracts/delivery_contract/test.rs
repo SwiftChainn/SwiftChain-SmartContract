@@ -694,3 +694,30 @@ fn test_driver_profile_increments_on_delivery() {
     assert_eq!(profile2.deliveries_completed, 2);
     assert_eq!(profile2.reputation_score, 2);
 }
+
+// ── Get Delivery Query Tests ────────────────────────────────────────────────
+
+#[test]
+fn test_get_delivery_success() {
+    let (env, client, _, _, _) = setup_test();
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let metadata = DeliveryMetadata {
+        recipient: recipient.clone(),
+    };
+    let delivery_id = client.create_delivery(&sender, &metadata);
+
+    let delivery = client.get_delivery(&delivery_id);
+
+    assert_eq!(delivery.delivery_id, delivery_id);
+    assert_eq!(delivery.sender, sender);
+    assert_eq!(delivery.status, DeliveryStatus::Pending);
+    assert_eq!(delivery.metadata.recipient, recipient);
+}
+
+#[test]
+#[should_panic(expected = "DeliveryNotFound")]
+fn test_get_delivery_not_found() {
+    let (_env, client, _, _, _) = setup_test();
+    client.get_delivery(&999);
+}

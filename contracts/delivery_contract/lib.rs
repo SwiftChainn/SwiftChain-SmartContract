@@ -380,6 +380,14 @@ impl DeliveryContract {
                 registered_at: env.ledger().timestamp(),
             })
     }
+
+    pub fn get_delivery(env: Env, delivery_id: DeliveryId) -> DeliveryRecord {
+        let key = DataKey::Delivery(delivery_id);
+        env.storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic!("DeliveryNotFound"))
+    }
 }
 
 #[cfg(test)]
