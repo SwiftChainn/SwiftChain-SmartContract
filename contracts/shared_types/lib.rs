@@ -172,20 +172,24 @@ pub struct DeliveryDetails {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EscrowStatus {
-    Pending,
+    Locked,
+    Paused,
     Released,
     Refunded,
-    Disputed,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EscrowRecord {
     pub sender: Address,
+    pub recipient: Address,
     pub driver: Address,
     pub token: Address,
     pub amount: i128,
     pub status: EscrowStatus,
+    pub created_at: u64,
+    pub disputed_by: Option<Address>,
+    pub disputed_at: Option<u64>,
 }
 
 #[cfg(test)]
@@ -354,3 +358,12 @@ mod test {
         assert_eq!(event.amount, 700);
     }
 }
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DriverProfile {
+    pub address: Address,
+    pub deliveries_completed: u32,
+    pub reputation_score: u32,
+    pub registered_at: u64,
+}
+

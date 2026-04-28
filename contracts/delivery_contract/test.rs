@@ -649,3 +649,75 @@ fn test_raise_dispute_emits_event() {
     let topic0: Symbol = Symbol::try_from_val(&env, &last_event.1.get(0).unwrap()).unwrap();
     assert_eq!(topic0, Symbol::new(&env, "delivery_disputed"));
 }
+
+// ── Driver Profile Reputation Tests ─────────────────────────────────────────
+
+#[test]
+fn test_driver_profile_starts_empty() {
+    let (env, client, _, driver, _) = setup_test();
+
+    let profile = client.get_driver_profile(&driver);
+    assert_eq!(profile.address, driver);
+    assert_eq!(profile.deliveries_completed, 0);
+    assert_eq!(profile.reputation_score, 0);
+}
+
+#[test]
+fn test_driver_profile_increments_on_delivery() {
+    let (env, client, admin, driver, _) = setup_test();
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    
+    // First delivery
+    let metadata = DeliveryMetadata {
+        recipient: recipient.clone(),
+    };
+    let delivery_id = client.create_delivery(&sender, &metadata);
+    client.assign_driver(&admin, &delivery_id, &driver);
+    client.mark_in_transit(&driver, &delivery_id);
+    client.confirm_delivery(&recipient, &delivery_id);
+
+    let profile1 = client.get_driver_profile(&driver);
+    assert_eq!(profile1.deliveries_completed, 1);
+    assert_eq!(profile1.reputation_score, 1);
+
+    // Second delivery
+    let metadata2 = DeliveryMetadata {
+        recipient: recipient.clone(),
+    };
+    let delivery_id2 = client.create_delivery(&sender, &metadata2);
+    client.assign_driver(&admin, &delivery_id2, &driver);
+    client.mark_in_transit(&driver, &delivery_id2);
+    client.confirm_delivery(&recipient, &delivery_id2);
+
+    let profile2 = client.get_driver_profile(&driver);
+    assert_eq!(profile2.deliveries_completed, 2);
+    assert_eq!(profile2.reputation_score, 2);
+}
+
+// ── Get Delivery Query Tests ────────────────────────────────────────────────
+
+#[test]
+fn test_get_delivery_success() {
+    let (env, client, _, _, _) = setup_test();
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let metadata = DeliveryMetadata {
+        recipient: recipient.clone(),
+    };
+    let delivery_id = client.create_delivery(&sender, &metadata);
+
+    let delivery = client.get_delivery(&delivery_id);
+
+    assert_eq!(delivery.delivery_id, delivery_id);
+    assert_eq!(delivery.sender, sender);
+    assert_eq!(delivery.status, DeliveryStatus::Pending);
+    assert_eq!(delivery.metadata.recipient, recipient);
+}
+
+#[test]
+#[should_panic(expected = "DeliveryNotFound")]
+fn test_get_delivery_not_found() {
+    let (_env, client, _, _, _) = setup_test();
+    client.get_delivery(&999);
+}

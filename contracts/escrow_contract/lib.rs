@@ -22,6 +22,19 @@ fn require_admin(env: &Env, caller: &Address) {
     }
 }
 
+fn is_admin(env: &Env, caller: &Address) -> bool {
+    let stored_admin: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::Admin)
+        .expect("Not initialized");
+    *caller == stored_admin
+}
+
+fn calculate_fee(amount: i128, platform_fee_bps: u32) -> i128 {
+    amount.saturating_mul(platform_fee_bps as i128) / 10_000
+}
+
 fn save_escrow(env: &Env, delivery_id: u64, record: &EscrowRecord) {
     let key = DataKey::Escrow(delivery_id);
     env.storage().persistent().set(&key, record);
@@ -56,6 +69,16 @@ enum DataKey {
     PlatformFeeBps,
     ProtocolVersion,
     Escrow(u64),
+}
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum EscrowError {
+    InvalidState = 1,
+    DeliveryNotFound = 2,
+    InsufficientFunds = 3,
+    DuplicateDelivery = 4,
 }
 
 #[contracttype]
@@ -216,6 +239,7 @@ impl EscrowContract {
     pub fn create_escrow(
         env: Env,
         sender: Address,
+        recipient: Address,
         driver: Address,
         delivery_id: u64,
         token: Address,
@@ -227,7 +251,7 @@ impl EscrowContract {
             .persistent()
             .has(&DataKey::Escrow(delivery_id))
         {
-            panic_with_error!(&env, SwiftChainError::DuplicateDelivery);
+            panic_with_error!(&env, EscrowError::DuplicateDelivery);
         }
         token::Client::new(&env, &token).transfer(
             &sender,
@@ -239,22 +263,32 @@ impl EscrowContract {
             delivery_id,
             &EscrowRecord {
                 sender: sender.clone(),
+                recipient: recipient.clone(),
                 driver,
                 token,
                 amount,
-                status: EscrowStatus::Pending,
+                status: EscrowStatus::Locked,
+                created_at: env.ledger().timestamp(),
+                disputed_by: None,
+                disputed_at: None,
             },
         );
-        env.events()
-            .publish((events::escrow_funded(&env), delivery_id), (sender, amount));
+        env.events().publish(
+            (events::escrow_funded(&env), delivery_id),
+            (sender, recipient, amount),
+        );
     }
 
     pub fn release_escrow(env: Env, caller: Address, delivery_id: u64) {
         caller.require_auth();
-        require_admin(&env, &caller);
         let mut record = load_escrow(&env, delivery_id);
-        if record.status != EscrowStatus::Pending {
-            panic_with_error!(&env, SwiftChainError::InvalidState);
+        let admin_authorized = is_admin(&env, &caller);
+        let recipient_authorized = caller == record.recipient;
+        if !admin_authorized && !recipient_authorized {
+            panic!("Unauthorized");
+        }
+        if record.status != EscrowStatus::Locked {
+            panic_with_error!(&env, EscrowError::InvalidState);
         }
         // Balance verification guard: confirm contract holds sufficient funds before transfer
         let contract_balance =
@@ -262,25 +296,53 @@ impl EscrowContract {
         if contract_balance < record.amount {
             panic_with_error!(&env, SwiftChainError::InsufficientFunds);
         }
-        token::Client::new(&env, &record.token).transfer(
-            &env.current_contract_address(),
-            &record.driver,
-            &record.amount,
-        );
+        let platform_fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PlatformFeeBps)
+            .unwrap_or(0);
+        let platform_fee = calculate_fee(record.amount, platform_fee_bps);
+        let driver_amount = record.amount.saturating_sub(platform_fee);
+
+        if driver_amount > 0 {
+            token::Client::new(&env, &record.token).transfer(
+                &env.current_contract_address(),
+                &record.driver,
+                &driver_amount,
+            );
+        }
+
+        if platform_fee > 0 {
+            let admin: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::Admin)
+                .expect("Not initialized");
+            token::Client::new(&env, &record.token).transfer(
+                &env.current_contract_address(),
+                &admin,
+                &platform_fee,
+            );
+        }
+
         record.status = EscrowStatus::Released;
         save_escrow(&env, delivery_id, &record);
         env.events().publish(
             (events::escrow_released(&env), delivery_id),
-            (record.driver, record.amount, 0i128),
+            (record.driver, driver_amount, platform_fee),
         );
     }
 
     pub fn refund_escrow(env: Env, caller: Address, delivery_id: u64) {
         caller.require_auth();
-        require_admin(&env, &caller);
         let mut record = load_escrow(&env, delivery_id);
-        if record.status != EscrowStatus::Pending {
-            panic_with_error!(&env, SwiftChainError::InvalidState);
+        let admin_authorized = is_admin(&env, &caller);
+        let sender_authorized = caller == record.sender;
+        if !admin_authorized && !sender_authorized {
+            panic!("Unauthorized");
+        }
+        if record.status != EscrowStatus::Locked && record.status != EscrowStatus::Paused {
+            panic_with_error!(&env, EscrowError::InvalidState);
         }
         // Balance verification guard: confirm contract holds sufficient funds before transfer
         let contract_balance =
@@ -304,15 +366,17 @@ impl EscrowContract {
     pub fn raise_dispute(env: Env, caller: Address, delivery_id: u64) {
         caller.require_auth();
         let mut record = load_escrow(&env, delivery_id);
-        if caller != record.sender {
-            panic!("only the escrow sender can raise a dispute");
+        if caller != record.sender && caller != record.recipient {
+            panic!("Unauthorized");
         }
-        if record.status != EscrowStatus::Pending {
-            panic_with_error!(&env, SwiftChainError::InvalidState);
+        if record.status != EscrowStatus::Locked {
+            panic_with_error!(&env, EscrowError::InvalidState);
         }
-        record.status = EscrowStatus::Disputed;
-        save_escrow(&env, delivery_id, &record);
         let timestamp = env.ledger().timestamp();
+        record.status = EscrowStatus::Paused;
+        record.disputed_by = Some(caller.clone());
+        record.disputed_at = Some(timestamp);
+        save_escrow(&env, delivery_id, &record);
         env.events().publish(
             (events::delivery_disputed(&env), delivery_id),
             (caller, timestamp),
@@ -323,15 +387,39 @@ impl EscrowContract {
         caller.require_auth();
         require_admin(&env, &caller);
         let mut record = load_escrow(&env, delivery_id);
-        if record.status != EscrowStatus::Disputed {
-            panic_with_error!(&env, SwiftChainError::InvalidState);
+        if record.status != EscrowStatus::Paused {
+            panic_with_error!(&env, EscrowError::InvalidState);
         }
         if release_to_driver {
-            token::Client::new(&env, &record.token).transfer(
-                &env.current_contract_address(),
-                &record.driver,
-                &record.amount,
-            );
+            let platform_fee_bps: u32 = env
+                .storage()
+                .instance()
+                .get(&DataKey::PlatformFeeBps)
+                .unwrap_or(0);
+            let platform_fee = calculate_fee(record.amount, platform_fee_bps);
+            let driver_amount = record.amount.saturating_sub(platform_fee);
+
+            if driver_amount > 0 {
+                token::Client::new(&env, &record.token).transfer(
+                    &env.current_contract_address(),
+                    &record.driver,
+                    &driver_amount,
+                );
+            }
+
+            if platform_fee > 0 {
+                let admin: Address = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::Admin)
+                    .expect("Not initialized");
+                token::Client::new(&env, &record.token).transfer(
+                    &env.current_contract_address(),
+                    &admin,
+                    &platform_fee,
+                );
+            }
+
             record.status = EscrowStatus::Released;
         } else {
             token::Client::new(&env, &record.token).transfer(
