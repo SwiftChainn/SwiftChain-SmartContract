@@ -1,4 +1,5 @@
 use super::*;
+use shared_types::SwiftChainError;
 use soroban_sdk::{
     testutils::Address as _,
     token::{Client as TokenClient, StellarAssetClient},
@@ -15,6 +16,18 @@ fn setup_env() -> (Env, Address) {
 fn setup_token(env: &Env, admin: &Address) -> Address {
     env.register_stellar_asset_contract_v2(admin.clone())
         .address()
+}
+
+fn init_contract(
+    env: &Env,
+    client: &EscrowContractClient,
+    admin: &Address,
+    platform_fee_bps: u32,
+) -> Address {
+    let token_admin = Address::generate(env);
+    let token = setup_token(env, &token_admin);
+    client.init(admin, &token, &platform_fee_bps);
+    token
 }
 
 fn mint(env: &Env, token: &Address, to: &Address, amount: i128) {

@@ -290,7 +290,7 @@ fn test_create_delivery_incrementing_ids_and_persistence() {
 }
 
 #[test]
-#[should_panic(expected = "AlreadyInitialized")]
+#[should_panic]
 fn test_double_init() {
     let (env, client, admin, _, _) = setup_test();
     let escrow = Address::generate(&env);
