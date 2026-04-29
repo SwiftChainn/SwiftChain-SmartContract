@@ -392,3 +392,4 @@ impl DeliveryContract {
 
 #[cfg(test)]
 mod test;
+# TTL management — implementation in progress
