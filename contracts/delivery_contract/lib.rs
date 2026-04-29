@@ -1,8 +1,9 @@
 #![no_std]
- 
+
 use soroban_sdk::{
-    contract, contractimpl, contracttype, Address, Env, Symbol,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, Symbol,
 };
+use shared_types::DriverProfile;
 
 pub type DeliveryId = u64;
 
@@ -14,6 +15,7 @@ pub enum DeliveryStatus {
     InTransit,
     Delivered,
     Cancelled,
+    Disputed,
 }
 
 #[contracttype]
@@ -32,6 +34,7 @@ pub struct DeliveryRecord {
     pub metadata: DeliveryMetadata,
     pub created_at: u64,
     pub delivered_at: Option<u64>,
+    pub transit_started_at: Option<u64>,
 }
 
 #[contracttype]
@@ -41,6 +44,42 @@ pub enum DataKey {
     DeliveryCounter,
     Admin,
     EscrowContract,
+    DriverProfile(Address),
+}
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum DeliveryError {
+    InvalidState = 1,
+}
+
+/// Validate whether a status transition is permitted by the delivery state machine.
+///
+/// Allowed transitions:
+///   Pending   → Active, Cancelled
+///   Active    → InTransit, Disputed, Cancelled
+///   InTransit → Delivered, Disputed
+///   Disputed  → Delivered, Cancelled
+///   Delivered, Cancelled → (terminal, no transitions)
+pub fn validate_transition(from: DeliveryStatus, to: DeliveryStatus) -> Result<(), DeliveryError> {
+    let valid = match (&from, &to) {
+        (DeliveryStatus::Pending, DeliveryStatus::Active) => true,
+        (DeliveryStatus::Pending, DeliveryStatus::Cancelled) => true,
+        (DeliveryStatus::Active, DeliveryStatus::InTransit) => true,
+        (DeliveryStatus::Active, DeliveryStatus::Disputed) => true,
+        (DeliveryStatus::Active, DeliveryStatus::Cancelled) => true,
+        (DeliveryStatus::InTransit, DeliveryStatus::Delivered) => true,
+        (DeliveryStatus::InTransit, DeliveryStatus::Disputed) => true,
+        (DeliveryStatus::Disputed, DeliveryStatus::Delivered) => true,
+        (DeliveryStatus::Disputed, DeliveryStatus::Cancelled) => true,
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(DeliveryError::InvalidState)
+    }
 }
 
 #[contract]
@@ -53,8 +92,12 @@ impl DeliveryContract {
             panic!("AlreadyInitialized");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::EscrowContract, &escrow_contract);
-        env.storage().persistent().set(&DataKey::DeliveryCounter, &0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::EscrowContract, &escrow_contract);
+        env.storage()
+            .persistent()
+            .set(&DataKey::DeliveryCounter, &0u64);
 
         env.events().publish(
             (Symbol::new(&env, "DeliveryContractInitialized"),),
@@ -65,9 +108,15 @@ impl DeliveryContract {
     pub fn create_delivery(env: Env, sender: Address, metadata: DeliveryMetadata) -> DeliveryId {
         sender.require_auth();
 
-        let mut counter: u64 = env.storage().persistent().get(&DataKey::DeliveryCounter).unwrap_or(0);
+        let mut counter: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::DeliveryCounter)
+            .unwrap_or(0);
         counter += 1;
-        env.storage().persistent().set(&DataKey::DeliveryCounter, &counter);
+        env.storage()
+            .persistent()
+            .set(&DataKey::DeliveryCounter, &counter);
 
         let delivery_id = counter;
 
@@ -79,13 +128,11 @@ impl DeliveryContract {
             metadata,
             created_at: env.ledger().timestamp(),
             delivered_at: None,
+            transit_started_at: None,
         };
-        
 
         let key = DataKey::Delivery(delivery_id);
         env.storage().persistent().set(&key, &record);
-        
-        // Extend TTL
         env.storage().persistent().extend_ttl(&key, 518400, 518400);
 
         env.events().publish(
@@ -96,11 +143,7 @@ impl DeliveryContract {
         delivery_id
     }
 
-    pub fn cancel_delivery(
-        env: Env,
-        sender: Address,
-        delivery_id: DeliveryId,
-    ) {
+    pub fn cancel_delivery(env: Env, sender: Address, delivery_id: DeliveryId) {
         sender.require_auth();
 
         let key = DataKey::Delivery(delivery_id);
@@ -114,9 +157,8 @@ impl DeliveryContract {
             panic!("NotAuthorized");
         }
 
-        if delivery.status != DeliveryStatus::Pending && delivery.status != DeliveryStatus::Active {
-            panic!("InvalidState");
-        }
+        validate_transition(delivery.status.clone(), DeliveryStatus::Cancelled)
+            .unwrap_or_else(|_| panic!("InvalidState"));
 
         let escrow_address: Address = env
             .storage()
@@ -141,12 +183,7 @@ impl DeliveryContract {
         );
     }
 
-    pub fn assign_driver(
-        env: Env,
-        caller: Address,
-        delivery_id: DeliveryId,
-        driver: Address,
-    ) {
+    pub fn assign_driver(env: Env, caller: Address, delivery_id: DeliveryId, driver: Address) {
         caller.require_auth();
 
         let is_admin = Self::is_admin(&env, &caller);
@@ -163,16 +200,13 @@ impl DeliveryContract {
             .get(&key)
             .unwrap_or_else(|| panic!("DeliveryNotFound"));
 
-        if delivery.status != DeliveryStatus::Pending {
-            panic!("InvalidState");
-        }
+        validate_transition(delivery.status.clone(), DeliveryStatus::Active)
+            .unwrap_or_else(|_| panic!("InvalidState"));
 
         delivery.driver = Some(driver.clone());
         delivery.status = DeliveryStatus::Active;
 
         env.storage().persistent().set(&key, &delivery);
-
-        // Extend TTL: ~30 days
         env.storage().persistent().extend_ttl(&key, 518400, 518400);
 
         env.events().publish(
@@ -181,11 +215,41 @@ impl DeliveryContract {
         );
     }
 
-    pub fn confirm_delivery(
-        env: Env,
-        recipient: Address,
-        delivery_id: DeliveryId,
-    ) {
+    /// Allow the assigned driver to mark a delivery as actively in transit.
+    /// Transitions: Active → InTransit. Records the ledger timestamp.
+    pub fn mark_in_transit(env: Env, driver: Address, delivery_id: DeliveryId) {
+        driver.require_auth();
+
+        let key = DataKey::Delivery(delivery_id);
+        let mut delivery: DeliveryRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic!("DeliveryNotFound"));
+
+        // Verify caller is the assigned driver for this delivery
+        match &delivery.driver {
+            Some(assigned) if *assigned == driver => {}
+            _ => panic!("NotAuthorized"),
+        }
+
+        validate_transition(delivery.status.clone(), DeliveryStatus::InTransit)
+            .unwrap_or_else(|_| panic!("InvalidState"));
+
+        let timestamp = env.ledger().timestamp();
+        delivery.status = DeliveryStatus::InTransit;
+        delivery.transit_started_at = Some(timestamp);
+
+        env.storage().persistent().set(&key, &delivery);
+        env.storage().persistent().extend_ttl(&key, 518400, 518400);
+
+        env.events().publish(
+            (Symbol::new(&env, "DeliveryInTransit"),),
+            (delivery_id, driver, timestamp),
+        );
+    }
+
+    pub fn confirm_delivery(env: Env, recipient: Address, delivery_id: DeliveryId) {
         recipient.require_auth();
 
         let key = DataKey::Delivery(delivery_id);
@@ -199,9 +263,8 @@ impl DeliveryContract {
             panic!("NotAuthorized");
         }
 
-        if delivery.status != DeliveryStatus::InTransit {
-            panic!("InvalidState");
-        }
+        validate_transition(delivery.status.clone(), DeliveryStatus::Delivered)
+            .unwrap_or_else(|_| panic!("InvalidState"));
 
         let escrow_address: Address = env
             .storage()
@@ -222,9 +285,78 @@ impl DeliveryContract {
         env.storage().persistent().set(&key, &delivery);
         env.storage().persistent().extend_ttl(&key, 518400, 518400);
 
+        if let Some(driver_addr) = &delivery.driver {
+            let driver_key = DataKey::DriverProfile(driver_addr.clone());
+            let mut profile: DriverProfile = env
+                .storage()
+                .persistent()
+                .get(&driver_key)
+                .unwrap_or_else(|| DriverProfile {
+                    address: driver_addr.clone(),
+                    deliveries_completed: 0,
+                    reputation_score: 0,
+                    registered_at: env.ledger().timestamp(),
+                });
+
+            profile.deliveries_completed += 1;
+            profile.reputation_score += 1;
+
+            env.storage().persistent().set(&driver_key, &profile);
+            env.storage().persistent().extend_ttl(&driver_key, 518400, 518400);
+        }
+
         env.events().publish(
             (soroban_sdk::Symbol::new(&env, "delivery_confirmed"),),
             (delivery_id, recipient),
+        );
+    }
+
+    /// Allow sender or recipient to escalate a delivery to Disputed and pause
+    /// the escrow via a cross-contract call. The escrow call executes first so
+    /// that delivery state is never mutated when the escrow call fails.
+    pub fn raise_dispute(env: Env, caller: Address, delivery_id: DeliveryId) {
+        caller.require_auth();
+
+        let key = DataKey::Delivery(delivery_id);
+        let mut delivery: DeliveryRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic!("DeliveryNotFound"));
+
+        let is_sender = caller == delivery.sender;
+        let is_recipient = caller == delivery.metadata.recipient;
+        if !is_sender && !is_recipient {
+            panic!("NotAuthorized");
+        }
+
+        validate_transition(delivery.status.clone(), DeliveryStatus::Disputed)
+            .unwrap_or_else(|_| panic!("InvalidState"));
+
+        let escrow_address: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::EscrowContract)
+            .unwrap_or_else(|| panic!("EscrowNotConfigured"));
+
+        // Cross-contract call first: if escrow raises dispute fails, delivery
+        // state is not mutated (implicit rollback via propagated panic).
+        use soroban_sdk::IntoVal;
+        let _: () = env.invoke_contract(
+            &escrow_address,
+            &Symbol::new(&env, "raise_dispute"),
+            soroban_sdk::vec![&env, delivery_id.into_val(&env)],
+        );
+
+        let timestamp = env.ledger().timestamp();
+        delivery.status = DeliveryStatus::Disputed;
+
+        env.storage().persistent().set(&key, &delivery);
+        env.storage().persistent().extend_ttl(&key, 518400, 518400);
+
+        env.events().publish(
+            (Symbol::new(&env, "delivery_disputed"),),
+            (delivery_id, caller, timestamp),
         );
     }
 
@@ -235,8 +367,28 @@ impl DeliveryContract {
             false
         }
     }
+
+    pub fn get_driver_profile(env: Env, driver: Address) -> DriverProfile {
+        let driver_key = DataKey::DriverProfile(driver.clone());
+        env.storage()
+            .persistent()
+            .get(&driver_key)
+            .unwrap_or_else(|| DriverProfile {
+                address: driver,
+                deliveries_completed: 0,
+                reputation_score: 0,
+                registered_at: env.ledger().timestamp(),
+            })
+    }
+
+    pub fn get_delivery(env: Env, delivery_id: DeliveryId) -> DeliveryRecord {
+        let key = DataKey::Delivery(delivery_id);
+        env.storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic!("DeliveryNotFound"))
+    }
 }
 
 #[cfg(test)]
 mod test;
-
