@@ -228,7 +228,15 @@ fn test_cancel_delivery_escrow_failure() {
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
     let metadata = get_test_metadata(&env, 999);
+    
+    env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::DeliveryCounter, &998u64);
+    });
+
     let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
+    assert_eq!(delivery_id, 999);
 
     client.cancel_delivery(&sender, &delivery_id);
 }
@@ -578,6 +586,13 @@ fn test_raise_dispute_escrow_failure_reverts_delivery_state() {
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
     let metadata = get_test_metadata(&env, 777);
+    
+    env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::DeliveryCounter, &776u64);
+    });
+
     let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
     assert_eq!(delivery_id, 777);
     client.assign_driver(&admin, &delivery_id, &driver);
