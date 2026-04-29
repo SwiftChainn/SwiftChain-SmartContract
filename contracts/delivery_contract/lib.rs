@@ -3,7 +3,7 @@
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, Symbol,
 };
-use shared_types::DriverProfile;
+use shared_types::{DriverProfile, DeliveryMetadata, CargoDescriptor, CargoCategory};
 
 pub type DeliveryId = u64;
 
@@ -18,17 +18,14 @@ pub enum DeliveryStatus {
     Disputed,
 }
 
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DeliveryMetadata {
-    pub recipient: Address,
-}
+// Local DeliveryMetadata removed in favor of shared_types::DeliveryMetadata
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeliveryRecord {
     pub delivery_id: DeliveryId,
     pub sender: Address,
+    pub recipient: Address,
     pub driver: Option<Address>,
     pub status: DeliveryStatus,
     pub metadata: DeliveryMetadata,
@@ -105,7 +102,7 @@ impl DeliveryContract {
         );
     }
 
-    pub fn create_delivery(env: Env, sender: Address, metadata: DeliveryMetadata) -> DeliveryId {
+    pub fn create_delivery(env: Env, sender: Address, recipient: Address, metadata: DeliveryMetadata) -> DeliveryId {
         sender.require_auth();
 
         let mut counter: u64 = env
@@ -123,6 +120,7 @@ impl DeliveryContract {
         let record = DeliveryRecord {
             delivery_id,
             sender: sender.clone(),
+            recipient,
             driver: None,
             status: DeliveryStatus::Pending,
             metadata,
@@ -259,7 +257,7 @@ impl DeliveryContract {
             .get(&key)
             .unwrap_or_else(|| panic!("DeliveryNotFound"));
 
-        if recipient != delivery.metadata.recipient {
+        if recipient != delivery.recipient {
             panic!("NotAuthorized");
         }
 
@@ -325,7 +323,7 @@ impl DeliveryContract {
             .unwrap_or_else(|| panic!("DeliveryNotFound"));
 
         let is_sender = caller == delivery.sender;
-        let is_recipient = caller == delivery.metadata.recipient;
+        let is_recipient = caller == delivery.recipient;
         if !is_sender && !is_recipient {
             panic!("NotAuthorized");
         }

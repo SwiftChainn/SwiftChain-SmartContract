@@ -3,8 +3,9 @@ extern crate std;
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Events},
-    Address, Env, Symbol, TryFromVal,
+    Address, Env, Symbol, TryFromVal, String
 };
+use shared_types::{DeliveryMetadata, CargoDescriptor, CargoCategory};
 
 // ── Escrow mock ───────────────────────────────────────────────────────────────
 
@@ -53,6 +54,21 @@ fn setup_test() -> (
     (env, client, admin, driver, unauthorized)
 }
 
+fn get_test_metadata(env: &Env, delivery_id: u64) -> DeliveryMetadata {
+    DeliveryMetadata {
+        delivery_id,
+        origin: String::from_str(env, "Origin"),
+        destination: String::from_str(env, "Destination"),
+        cargo_description: CargoDescriptor {
+            weight_grams: 100,
+            category: CargoCategory::General,
+            fragile: false,
+        },
+        created_at: env.ledger().timestamp(),
+        estimated_delivery: env.ledger().timestamp() + 86400,
+    }
+}
+
 // ── Existing driver assignment tests ─────────────────────────────────────────
 
 #[test]
@@ -60,10 +76,8 @@ fn test_successful_assignment_by_admin() {
     let (env, client, admin, driver, _) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
 
     client.assign_driver(&admin, &delivery_id, &driver);
 
@@ -96,10 +110,8 @@ fn test_successful_self_assignment_by_driver() {
     let (env, client, _, driver, _) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
 
     client.assign_driver(&driver, &delivery_id, &driver);
 
@@ -120,10 +132,8 @@ fn test_unauthorized_caller_rejected() {
     let (env, client, _, driver, unauthorized) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
 
     client.assign_driver(&unauthorized, &delivery_id, &driver);
 }
@@ -134,10 +144,8 @@ fn test_assignment_when_status_not_pending() {
     let (env, client, admin, driver, _) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
 
     client.assign_driver(&admin, &delivery_id, &driver);
 
@@ -152,10 +160,8 @@ fn test_cancel_delivery_pending() {
     let (env, client, _admin, _, _) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
 
     client.cancel_delivery(&sender, &delivery_id);
 
@@ -174,10 +180,8 @@ fn test_cancel_delivery_active() {
     let (env, client, admin, driver, _) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
     client.assign_driver(&admin, &delivery_id, &driver);
 
     client.cancel_delivery(&sender, &delivery_id);
@@ -198,10 +202,8 @@ fn test_cancel_delivery_unauthorized() {
     let (env, client, _admin, _, unauthorized) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
 
     client.cancel_delivery(&unauthorized, &delivery_id);
 }
@@ -212,10 +214,8 @@ fn test_cancel_delivery_invalid_state() {
     let (env, client, _admin, _, _) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
 
     client.cancel_delivery(&sender, &delivery_id);
     client.cancel_delivery(&sender, &delivery_id);
@@ -227,17 +227,16 @@ fn test_cancel_delivery_escrow_failure() {
     let (env, client, _admin, _, _) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-
+    let metadata = get_test_metadata(&env, 999);
+    
     env.as_contract(&client.address, || {
         env.storage()
             .persistent()
             .set(&DataKey::DeliveryCounter, &998u64);
     });
 
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
+    assert_eq!(delivery_id, 999);
 
     client.cancel_delivery(&sender, &delivery_id);
 }
@@ -249,11 +248,9 @@ fn test_create_delivery_success_and_storage() {
     let (env, client, _, _, _) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
+    let metadata = get_test_metadata(&env, 1);
 
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
     assert_eq!(delivery_id, 1);
 
     let delivery: DeliveryRecord = env.as_contract(&client.address, || {
@@ -267,7 +264,7 @@ fn test_create_delivery_success_and_storage() {
     assert_eq!(delivery.sender, sender);
     assert_eq!(delivery.driver, None);
     assert_eq!(delivery.status, DeliveryStatus::Pending);
-    assert_eq!(delivery.metadata.recipient, recipient);
+    assert_eq!(delivery.recipient, recipient);
     assert_eq!(delivery.transit_started_at, None);
 }
 
@@ -276,13 +273,11 @@ fn test_create_delivery_incrementing_ids_and_persistence() {
     let (env, client, _, _, _) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
+    let metadata = get_test_metadata(&env, 1);
 
-    let id1 = client.create_delivery(&sender, &metadata);
-    let id2 = client.create_delivery(&sender, &metadata);
-    let id3 = client.create_delivery(&sender, &metadata);
+    let id1 = client.create_delivery(&sender, &recipient, &metadata);
+    let id2 = client.create_delivery(&sender, &recipient, &metadata);
+    let id3 = client.create_delivery(&sender, &recipient, &metadata);
 
     assert_eq!(id1, 1);
     assert_eq!(id2, 2);
@@ -390,10 +385,8 @@ fn test_mark_in_transit_success() {
     let (env, client, admin, driver, _) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
     client.assign_driver(&admin, &delivery_id, &driver);
 
     client.mark_in_transit(&driver, &delivery_id);
@@ -414,10 +407,8 @@ fn test_mark_in_transit_records_timestamp() {
     let (env, client, admin, driver, _) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
     client.assign_driver(&admin, &delivery_id, &driver);
 
     let ts_before = env.ledger().timestamp();
@@ -440,10 +431,8 @@ fn test_mark_in_transit_wrong_driver_rejected() {
     let (env, client, admin, driver, unauthorized) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
     client.assign_driver(&admin, &delivery_id, &driver);
 
     client.mark_in_transit(&unauthorized, &delivery_id);
@@ -455,10 +444,8 @@ fn test_mark_in_transit_unassigned_driver_rejected() {
     let (env, client, _, _, _) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
 
     let random_driver = Address::generate(&env);
     // No driver assigned — driver field is None → NotAuthorized
@@ -471,10 +458,8 @@ fn test_mark_in_transit_from_pending_rejected() {
     let (env, client, _, _, _) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
 
     let driver = Address::generate(&env);
     // Assign driver manually so the driver field matches but status is still Pending
@@ -493,10 +478,8 @@ fn test_mark_in_transit_emits_event() {
     let (env, client, admin, driver, _) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
     client.assign_driver(&admin, &delivery_id, &driver);
 
     client.mark_in_transit(&driver, &delivery_id);
@@ -514,10 +497,8 @@ fn test_raise_dispute_from_active_by_sender() {
     let (env, client, admin, driver, _) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
     client.assign_driver(&admin, &delivery_id, &driver);
 
     client.raise_dispute(&sender, &delivery_id);
@@ -536,10 +517,8 @@ fn test_raise_dispute_from_in_transit() {
     let (env, client, admin, driver, _) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
     client.assign_driver(&admin, &delivery_id, &driver);
     client.mark_in_transit(&driver, &delivery_id);
 
@@ -559,10 +538,8 @@ fn test_raise_dispute_by_recipient() {
     let (env, client, admin, driver, _) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
     client.assign_driver(&admin, &delivery_id, &driver);
 
     client.raise_dispute(&recipient, &delivery_id);
@@ -582,10 +559,8 @@ fn test_raise_dispute_non_participant_rejected() {
     let (env, client, admin, driver, unauthorized) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
     client.assign_driver(&admin, &delivery_id, &driver);
 
     client.raise_dispute(&unauthorized, &delivery_id);
@@ -597,10 +572,8 @@ fn test_raise_dispute_from_pending_rejected() {
     let (env, client, _, _, _) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
 
     // Delivery is still Pending — invalid transition
     client.raise_dispute(&sender, &delivery_id);
@@ -612,18 +585,15 @@ fn test_raise_dispute_escrow_failure_reverts_delivery_state() {
     let (env, client, admin, driver, _) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-
-    // Set counter to 776 so the next delivery_id is 777, which triggers mock failure
+    let metadata = get_test_metadata(&env, 777);
+    
     env.as_contract(&client.address, || {
         env.storage()
             .persistent()
             .set(&DataKey::DeliveryCounter, &776u64);
     });
 
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
     assert_eq!(delivery_id, 777);
     client.assign_driver(&admin, &delivery_id, &driver);
 
@@ -636,10 +606,8 @@ fn test_raise_dispute_emits_event() {
     let (env, client, admin, driver, _) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
     client.assign_driver(&admin, &delivery_id, &driver);
 
     client.raise_dispute(&sender, &delivery_id);
@@ -669,10 +637,8 @@ fn test_driver_profile_increments_on_delivery() {
     let recipient = Address::generate(&env);
     
     // First delivery
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
     client.assign_driver(&admin, &delivery_id, &driver);
     client.mark_in_transit(&driver, &delivery_id);
     client.confirm_delivery(&recipient, &delivery_id);
@@ -682,10 +648,8 @@ fn test_driver_profile_increments_on_delivery() {
     assert_eq!(profile1.reputation_score, 1);
 
     // Second delivery
-    let metadata2 = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id2 = client.create_delivery(&sender, &metadata2);
+    let metadata2 = get_test_metadata(&env, 2);
+    let delivery_id2 = client.create_delivery(&sender, &recipient, &metadata2);
     client.assign_driver(&admin, &delivery_id2, &driver);
     client.mark_in_transit(&driver, &delivery_id2);
     client.confirm_delivery(&recipient, &delivery_id2);
@@ -702,17 +666,15 @@ fn test_get_delivery_success() {
     let (env, client, _, _, _) = setup_test();
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let metadata = DeliveryMetadata {
-        recipient: recipient.clone(),
-    };
-    let delivery_id = client.create_delivery(&sender, &metadata);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&sender, &recipient, &metadata);
 
     let delivery = client.get_delivery(&delivery_id);
 
     assert_eq!(delivery.delivery_id, delivery_id);
     assert_eq!(delivery.sender, sender);
     assert_eq!(delivery.status, DeliveryStatus::Pending);
-    assert_eq!(delivery.metadata.recipient, recipient);
+    assert_eq!(delivery.recipient, recipient);
 }
 
 #[test]
