@@ -1,5 +1,6 @@
 #![no_std]
 
+use shared_types::SwiftChainError;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, Symbol,
 };
@@ -86,7 +87,7 @@ pub struct DeliveryContract;
 impl DeliveryContract {
     pub fn init(env: Env, admin: Address, escrow_contract: Address) {
         if env.storage().instance().has(&DataKey::Admin) {
-            panic!("AlreadyInitialized");
+            panic_with_error!(&env, SwiftChainError::AlreadyInitialized);
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
