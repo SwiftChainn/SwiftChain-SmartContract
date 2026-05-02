@@ -1,11 +1,11 @@
 [package]
-name = "shared_types"
+name = "settlement_contract"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-path = "lib.rs"
-crate-type = ["rlib"]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
 
 [dependencies]
 soroban-sdk = { workspace = true }
