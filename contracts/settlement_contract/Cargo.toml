@@ -5,10 +5,7 @@ edition = "2021"
 
 [lib]
 crate-type = ["cdylib"]
-path = "src/lib.rs"
+path = "lib.rs"
 
 [dependencies]
 soroban-sdk = { workspace = true }
-
-[dev-dependencies]
-soroban-sdk = { workspace = true, features = ["testutils"] }

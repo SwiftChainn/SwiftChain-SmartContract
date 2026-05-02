@@ -1,5 +1,5 @@
 [package]
-name = "fleet_management_contract"
+name = "identity_reputation_contract"
 version = "0.1.0"
 edition = "2021"
 

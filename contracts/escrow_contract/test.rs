@@ -3,7 +3,7 @@ use shared_types::SwiftChainError;
 use soroban_sdk::{
     testutils::Address as _,
     token::{Client as TokenClient, StellarAssetClient},
-    Address, Env, IntoVal,
+    Address, Env,
 };
 
 fn setup_env() -> (Env, Address) {
@@ -44,7 +44,9 @@ fn test_init_and_platform_fee_default() {
     let client = EscrowContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
 
-    client.init(&admin, &0);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
 
     assert_eq!(client.get_platform_fee(), 0);
     assert_eq!(client.get_admin(), admin);
@@ -56,7 +58,9 @@ fn test_update_platform_fee_success() {
     let client = EscrowContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
 
-    client.init(&admin, &0);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
     client.update_platform_fee(&admin, &250);
 
     assert_eq!(client.get_platform_fee(), 250);
@@ -68,12 +72,14 @@ fn test_update_platform_fee_invalid_value() {
     let client = EscrowContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
 
-    client.init(&admin, &0);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
     let result = client.try_update_platform_fee(&admin, &1100);
 
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
-        _ => panic!("Expected EscrowError::InvalidState"),
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidFee.into()),
+        _ => panic!("Expected EscrowError::InvalidFee"),
     }
 }
 
@@ -89,7 +95,7 @@ fn test_create_escrow_locks_funds_and_persists_record() {
     let token_admin = Address::generate(&env);
     let token = setup_token(&env, &token_admin);
 
-    client.init(&admin, &0);
+    client.init(&admin, &token, &0);
     mint(&env, &token, &sender, 1000);
 
     client.create_escrow(&sender, &recipient, &driver, &1u64, &token, &1000);
@@ -121,7 +127,7 @@ fn test_create_escrow_duplicate_delivery_rejected() {
     let token_admin = Address::generate(&env);
     let token = setup_token(&env, &token_admin);
 
-    client.init(&admin, &0);
+    client.init(&admin, &token, &0);
     mint(&env, &token, &sender, 2000);
 
     client.create_escrow(&sender, &recipient, &driver, &2u64, &token, &1000);
@@ -145,7 +151,7 @@ fn test_release_escrow_by_recipient_with_platform_fee_split() {
     let token_admin = Address::generate(&env);
     let token = setup_token(&env, &token_admin);
 
-    client.init(&admin, &0);
+    client.init(&admin, &token, &0);
     client.update_platform_fee(&admin, &500); // 5%
     mint(&env, &token, &sender, 1000);
 
@@ -171,12 +177,15 @@ fn test_release_escrow_unauthorized_rejected() {
     let token_admin = Address::generate(&env);
     let token = setup_token(&env, &token_admin);
 
-    client.init(&admin, &0);
+    client.init(&admin, &token, &0);
     mint(&env, &token, &sender, 500);
     client.create_escrow(&sender, &recipient, &driver, &4u64, &token, &500);
 
     let result = client.try_release_escrow(&attacker, &4u64);
-    assert!(result.is_err());
+    match result {
+        Err(Ok(err)) => assert_eq!(err, SwiftChainError::Unauthorized.into()),
+        _ => panic!("Expected SwiftChainError::Unauthorized"),
+    }
 }
 
 #[test]
@@ -191,7 +200,7 @@ fn test_refund_escrow_by_sender_full_amount_no_fee() {
     let token_admin = Address::generate(&env);
     let token = setup_token(&env, &token_admin);
 
-    client.init(&admin, &0);
+    client.init(&admin, &token, &0);
     client.update_platform_fee(&admin, &500);
     mint(&env, &token, &sender, 600);
 
@@ -216,7 +225,7 @@ fn test_raise_dispute_pauses_escrow_and_records_metadata() {
     let token_admin = Address::generate(&env);
     let token = setup_token(&env, &token_admin);
 
-    client.init(&admin, &0);
+    client.init(&admin, &token, &0);
     mint(&env, &token, &sender, 700);
     client.create_escrow(&sender, &recipient, &driver, &6u64, &token, &700);
 
@@ -240,7 +249,7 @@ fn test_refund_from_paused_state_by_admin_allowed() {
     let token_admin = Address::generate(&env);
     let token = setup_token(&env, &token_admin);
 
-    client.init(&admin, &0);
+    client.init(&admin, &token, &0);
     mint(&env, &token, &sender, 300);
 
     client.create_escrow(&sender, &recipient, &driver, &7u64, &token, &300);
@@ -263,7 +272,7 @@ fn test_release_from_paused_state_rejected_with_invalid_state() {
     let token_admin = Address::generate(&env);
     let token = setup_token(&env, &token_admin);
 
-    client.init(&admin, &0);
+    client.init(&admin, &token, &0);
     mint(&env, &token, &sender, 300);
 
     client.create_escrow(&sender, &recipient, &driver, &8u64, &token, &300);
@@ -288,7 +297,7 @@ fn test_refund_on_released_escrow_rejected_with_invalid_state() {
     let token_admin = Address::generate(&env);
     let token = setup_token(&env, &token_admin);
 
-    client.init(&admin, &0);
+    client.init(&admin, &token, &0);
     mint(&env, &token, &sender, 300);
 
     client.create_escrow(&sender, &recipient, &driver, &9u64, &token, &300);
@@ -313,7 +322,7 @@ fn test_insufficient_funds_guard_on_release() {
     let token_admin = Address::generate(&env);
     let token = setup_token(&env, &token_admin);
 
-    client.init(&admin, &0);
+    client.init(&admin, &token, &0);
     mint(&env, &token, &sender, 200);
     client.create_escrow(&sender, &recipient, &driver, &10u64, &token, &200);
 

@@ -196,9 +196,9 @@ pub struct EscrowRecord {
 mod test {
     use super::{
         DeliveryConfirmedEvent, DeliveryCreatedEvent, DeliveryDisputedEvent, DriverAssignedEvent,
-        EscrowFundedEvent, EscrowRefundedEvent, EscrowReleasedEvent, SwiftChainError,
+        EscrowFundedEvent, EscrowRefundedEvent, EscrowReleasedEvent, SwiftChainError, CargoDescriptor, CargoCategory, DeliveryMetadata,
     };
-    use soroban_sdk::{testutils::Address as _, Address, Env};
+    use soroban_sdk::{testutils::Address as _, Address, Env, String};
 
     #[test]
     fn unauthorized_has_expected_discriminant() {
@@ -357,6 +357,40 @@ mod test {
         assert_eq!(event.sender, sender);
         assert_eq!(event.amount, 700);
     }
+
+    #[test]
+    fn test_cargo_descriptor() {
+        let _env = Env::default();
+        let desc = CargoDescriptor {
+            weight_grams: 500,
+            category: CargoCategory::Electronics,
+            fragile: true,
+        };
+        assert_eq!(desc.weight_grams, 500);
+        assert_eq!(desc.fragile, true);
+        assert_eq!(desc.category, CargoCategory::Electronics);
+    }
+
+    #[test]
+    fn test_delivery_metadata() {
+        let env = Env::default();
+        let cargo = CargoDescriptor {
+            weight_grams: 1000,
+            category: CargoCategory::General,
+            fragile: false,
+        };
+        let metadata = DeliveryMetadata {
+            delivery_id: 1,
+            origin: String::from_str(&env, "Location A"),
+            destination: String::from_str(&env, "Location B"),
+            cargo_description: cargo,
+            created_at: 1000000,
+            estimated_delivery: 2000000,
+        };
+        assert_eq!(metadata.delivery_id, 1);
+        assert_eq!(metadata.created_at, 1000000);
+        assert_eq!(metadata.cargo_description.weight_grams, 1000);
+    }
 }
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -396,42 +430,4 @@ pub struct DeliveryMetadata {
     pub estimated_delivery: u64,
 }
 
-#[cfg(test)]
-mod test {
-    use super::*;
-    use soroban_sdk::{Env, String};
 
-    #[test]
-    fn test_cargo_descriptor() {
-        let _env = Env::default();
-        let desc = CargoDescriptor {
-            weight_grams: 500,
-            category: CargoCategory::Electronics,
-            fragile: true,
-        };
-        assert_eq!(desc.weight_grams, 500);
-        assert_eq!(desc.fragile, true);
-        assert_eq!(desc.category, CargoCategory::Electronics);
-    }
-
-    #[test]
-    fn test_delivery_metadata() {
-        let env = Env::default();
-        let cargo = CargoDescriptor {
-            weight_grams: 1000,
-            category: CargoCategory::General,
-            fragile: false,
-        };
-        let metadata = DeliveryMetadata {
-            delivery_id: 1,
-            origin: String::from_str(&env, "Location A"),
-            destination: String::from_str(&env, "Location B"),
-            cargo_description: cargo,
-            created_at: 1000000,
-            estimated_delivery: 2000000,
-        };
-        assert_eq!(metadata.delivery_id, 1);
-        assert_eq!(metadata.created_at, 1000000);
-        assert_eq!(metadata.cargo_description.weight_grams, 1000);
-    }
-}
