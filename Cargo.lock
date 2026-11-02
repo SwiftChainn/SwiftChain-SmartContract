@@ -435,7 +435,6 @@ version = "0.1.0"
 dependencies = [
  "delivery_contract",
  "escrow_contract",
- "identity_reputation_contract",
  "shared_types",
  "soroban-sdk",
 ]
