@@ -21,3 +21,9 @@ scripts/initialize/create-swift-smart-contract-issues.py
 
 # Soroban test snapshots
 test_snapshots/
+
+# Generated files
+.contextSwiftSmartContract/
+ARCHITECTURE.md
+
+
